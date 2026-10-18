@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Powerset Engine</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: two-pane workbench. Left = NFA definition, right = construction output (table, trace, graph, tester). */
+:root{
+  --bg:#eceff3; --surface:#f8fafb; --ink:#121c27; --muted:#5a6877; --line:#cbd3dc;
+  --accent:#0b6e6a; --accent-ink:#ffffff; --hot:#b45309; --ok:#15803d; --bad:#b91c1c;
+  --soft:#e2e8ee;
+  --font-body:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e151c; --surface:#151e27; --ink:#e4eaf0; --muted:#8d9bab; --line:#2a3744;
+    --accent:#4fd1c5; --accent-ink:#06201e; --hot:#f59e0b; --ok:#4ade80; --bad:#f87171; --soft:#1d2833;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e151c; --surface:#151e27; --ink:#e4eaf0; --muted:#8d9bab; --line:#2a3744;
+  --accent:#4fd1c5; --accent-ink:#06201e; --hot:#f59e0b; --ok:#4ade80; --bad:#f87171; --soft:#1d2833;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--font-body); font-size:15px; line-height:1.5;
+  padding-block:20px 40px;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));
+  padding-right:max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+header h1{margin:0;font-size:1.75rem;line-height:1.15;letter-spacing:-.01em;text-wrap:balance}
+header p{margin:6px 0 0;color:var(--muted);max-width:68ch}
+.grid{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
+@media (min-width:920px){.grid{grid-template-columns:minmax(0,340px) minmax(0,1fr)}}
+.col{display:flex;flex-direction:column;gap:18px;min-width:0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px;min-width:0}
+.panel h2{margin:0 0 12px;font-size:.78rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:600}
+label{display:block;font-size:.85rem;font-weight:600;margin-bottom:4px}
+.hint{font-size:.78rem;color:var(--muted);margin:4px 0 0}
+input[type=text],textarea,select{
+  width:100%;font-family:var(--font-mono);font-size:.9rem;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:4px;padding:8px 10px;
+}
+textarea{min-height:170px;resize:vertical;line-height:1.55}
+input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.field{margin-bottom:14px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.errs{margin:10px 0 0;padding:10px 12px;border-left:3px solid var(--bad);background:var(--soft);font-size:.83rem;color:var(--ink);display:none}
+.errs.on{display:block}
+.chk{display:flex;gap:8px;align-items:center;font-weight:500;font-size:.85rem;margin:0}
+.chk input{accent-color:var(--accent);width:16px;height:16px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}
+.stat .n{font-family:var(--font-mono);font-size:1.7rem;font-weight:600;line-height:1.1}
+.stat .l{font-size:.78rem;color:var(--muted)}
+.scroll{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;width:100%;font-family:var(--font-mono);font-size:.88rem}
+th,td{border-bottom:1px solid var(--line);padding:7px 12px;text-align:left;white-space:nowrap}
+th{font-family:var(--font-body);font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+td.sub{color:var(--muted)}
+.mk{display:inline-block;width:1.4em;color:var(--accent);font-weight:700}
+.tag{font-family:var(--font-body);font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:3px;background:var(--hot);color:var(--bg);margin-left:6px}
+.trace{max-height:380px;overflow:auto;font-family:var(--font-mono);font-size:.82rem;display:flex;flex-direction:column;gap:14px}
+.step h3{margin:0 0 4px;font-size:.85rem;font-weight:600}
+.step .ln{display:grid;grid-template-columns:3.2em minmax(0,1fr);gap:8px;color:var(--muted);padding:1px 0}
+.step .ln b{color:var(--ink);font-weight:500}
+.step .ln span{overflow-wrap:anywhere}
+.arrow{color:var(--accent)}
+svg.g{display:block;min-width:100%}
+svg .node{fill:var(--bg);stroke:var(--ink);stroke-width:1.6}
+svg .node.on{fill:var(--accent);}
+svg .nl{fill:var(--ink);font-family:var(--font-mono);font-size:13px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+svg .node.on + .ring + .nl, svg .on ~ .nl{fill:var(--accent-ink)}
+svg .ring{fill:none;stroke:var(--ink);stroke-width:1.2}
+svg .edge{fill:none;stroke:var(--muted);stroke-width:1.5}
+svg .el{fill:var(--ink);font-family:var(--font-mono);font-size:12px;text-anchor:middle;dominant-baseline:central;paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+svg .ah{fill:var(--muted)}
+.tester{display:flex;gap:12px;flex-wrap:wrap}
+.tester .box{flex:1 1 220px;min-width:0}
+.res{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.verdict{flex:1 1 200px;min-width:0;border:1px solid var(--line);border-radius:4px;padding:10px 12px;font-size:.88rem}
+.verdict .t{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.verdict .v{font-family:var(--font-mono);font-weight:600;font-size:1.05rem}
+.verdict .v.ok{color:var(--ok)} .verdict .v.no{color:var(--bad)}
+.verdict .p{font-family:var(--font-mono);font-size:.8rem;color:var(--muted);overflow-wrap:anywhere;margin-top:2px}
+button{font-family:var(--font-body);font-size:.85rem;font-weight:600;border-radius:4px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:7px 14px;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent)}
+pre.def{margin:0;font-family:var(--font-mono);font-size:.82rem;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:12px}
+.head-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.head-row h2{margin:0}
+.empty{color:var(--muted);font-size:.9rem}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Powerset Engine</h1>
+    <p>Define an NFA with several targets per input (and ε-moves), and get the equivalent DFA built by subset construction. Every step of the construction is shown, and you can run strings through both machines.</p>
+  </header>
+
+  <div class="grid">
+    <div class="col">
+      <section class="panel" aria-labelledby="h-def">
+        <h2 id="h-def">NFA definition</h2>
+        <div class="field">
+          <label for="preset">Load an example</label>
+          <select id="preset"></select>
+        </div>
+        <div class="row2 field">
+          <div>
+            <label for="start">Start state</label>
+            <input type="text" id="start" autocomplete="off" spellcheck="false">
+          </div>
+          <div>
+            <label for="accept">Accepting states</label>
+            <input type="text" id="accept" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div class="field">
+          <label for="trans">Transitions</label>
+          <textarea id="trans" spellcheck="false" autocomplete="off"></textarea>
+          <p class="hint">One per line: <code>state symbol -&gt; target target …</code>. Use <code>ε</code>, <code>eps</code> or <code>λ</code> for an empty move. Lines starting with <code>#</code> are ignored. States and the alphabet are read from the lines.</p>
+        </div>
+        <label class="chk"><input type="checkbox" id="dead" checked> Include the dead state ∅ so the DFA is complete</label>
+        <div class="errs" id="errs" role="alert"></div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="panel" aria-label="Summary">
+        <div class="stats" id="stats"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-tab">
+        <h2 id="h-tab">DFA transition table</h2>
+        <div class="scroll" id="table"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-graph">
+        <h2 id="h-graph">DFA diagram</h2>
+        <div class="scroll" id="graph"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-trace">
+        <h2 id="h-trace">Construction steps</h2>
+        <div class="trace" id="trace"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-test">
+        <h2 id="h-test">Test a string</h2>
+        <div class="tester">
+          <div class="box">
+            <label for="word">Input string (symbols separated by spaces if they are longer than one character)</label>
+            <input type="text" id="word" value="aabb" autocomplete="off" spellcheck="false">
+            <p class="hint">Leave empty to test the empty string.</p>
+          </div>
+        </div>
+        <div class="res" id="res"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-out">
+        <div class="head-row">
+          <h2 id="h-out">DFA as text</h2>
+          <button type="button" class="ghost" id="copy">Copy</button>
+        </div>
+        <pre class="def" id="def"></pre>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var EPS = 'ε';
+  var EPS_NAMES = ['ε','eps','epsilon','λ','lambda'];
+  var PRESETS = [
+    {name:'Strings ending in abb', start:'q0', accept:'q3', word:'aabb',
+     trans:'q0 a -> q0 q1\nq0 b -> q0\nq1 b -> q2\nq2 b -> q3'},
+    {name:'Third symbol from the end is 1', start:'q0', accept:'q3', word:'0100',
+     trans:'q0 0 -> q0\nq0 1 -> q0 q1\nq1 0 -> q2\nq1 1 -> q2\nq2 0 -> q3\nq2 1 -> q3'},
+    {name:'a*b*c* with ε-moves', start:'q0', accept:'q2', word:'aabcc',
+     trans:'q0 a -> q0\nq0 ε -> q1\nq1 b -> q1\nq1 ε -> q2\nq2 c -> q2'},
+    {name:'Contains 01 or ends in 11', start:'s', accept:'f g', word:'1011',
+     trans:'s 0 -> s p\ns 1 -> s r\np 1 -> f\nf 0 -> f\nf 1 -> f\nr 1 -> g'}
+  ];
+
+  function $(id){return document.getElementById(id);}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+  var presetSel = $('preset');
+  PRESETS.forEach(function(p,i){var o=document.createElement('option');o.value=i;o.textContent=p.name;presetSel.appendChild(o);});
+
+  /* ---------- parsing ---------- */
+  function parseNFA(){
+    var errs = [], order = [], seen = {}, alpha = [], aseen = {}, trans = {};
+    function addState(s){ if(!seen[s]){seen[s]=true;order.push(s);} }
+    var start = $('start').value.trim();
+    var accept = $('accept').value.split(/[\s,{}]+/).filter(Boolean);
+    if(!start) errs.push('Enter a start state.');
+    else addState(start);
+    $('trans').value.split('\n').forEach(function(raw,i){
+      var ln = raw.trim();
+      if(!ln || ln.charAt(0)==='#') return;
+      var parts = ln.split(/->|→/);
+      if(parts.length!==2){errs.push('Line '+(i+1)+': write it as "state symbol -> targets".');return;}
+      var L = parts[0].split(/[\s,]+/).filter(Boolean);
+      var T = parts[1].split(/[\s,{}]+/).filter(Boolean);
+      if(L.length!==2){errs.push('Line '+(i+1)+': the left side needs one state and one symbol.');return;}
+      if(!T.length){errs.push('Line '+(i+1)+': add at least one target state.');return;}
+      var src = L[0], sym = L[1];
+      if(EPS_NAMES.indexOf(sym.toLowerCase())>=0) sym = EPS;
+      addState(src); T.forEach(addState);
+      if(sym!==EPS && !aseen[sym]){aseen[sym]=true;alpha.push(sym);}
+      trans[src] = trans[src] || {};
+      trans[src][sym] = trans[src][sym] || [];
+      T.forEach(function(t){ if(trans[src][sym].indexOf(t)<0) trans[src][sym].push(t); });
+    });
+    accept.forEach(function(a){
+      if(!seen[a]) errs.push('Accepting state "'+a+'" does not appear in any transition.');
+    });
+    if(!alpha.length && !errs.length) errs.push('Add at least one transition on a real input symbol.');
+    var idx = {}; order.forEach(function(s,i){idx[s]=i;});
+    return {errs:errs, states:order, idx:idx, alpha:alpha, trans:trans, start:start, accept:accept.filter(function(a){return seen[a];})};
+  }
+
+  /* ---------- NFA primitives ---------- */
+  function closure(nfa, set){
+    var out = {}, stack = [];
+    set.forEach(function(s){out[s]=true;stack.push(s);});
+    while(stack.length){
+      var s = stack.pop();
+      var nx = (nfa.trans[s] && nfa.trans[s][EPS]) || [];
+      nx.forEach(function(t){ if(!out[t]){out[t]=true;stack.push(t);} });
+    }
+    return sortSet(nfa, Object.keys(out));
+  }
+  function move(nfa, set, sym){
+    var out = {};
+    set.forEach(function(s){
+      var nx = (nfa.trans[s] && nfa.trans[s][sym]) || [];
+      nx.forEach(function(t){out[t]=true;});
+    });
+    return sortSet(nfa, Object.keys(out));
+  }
+  function sortSet(nfa, arr){ return arr.sort(function(a,b){return nfa.idx[a]-nfa.idx[b];}); }
+  function key(set){ return set.join('\u0001'); }
+  function label(set){ return set.length ? '{'+set.join(', ')+'}' : '∅'; }
+  function dname(i){ return i<26 ? String.fromCharCode(65+i) : 'S'+i; }
+
+  /* ---------- subset construction ---------- */
+  var LIMIT = 300;
+  function construct(nfa, withDead){
+    var states = [], byKey = {}, steps = [], truncated = false;
+    function add(set){
+      var k = key(set);
+      if(byKey[k]!==undefined) return {id:byKey[k], isNew:false};
+      var id = states.length;
+      byKey[k] = id;
+      var acc = set.some(function(s){return nfa.accept.indexOf(s)>=0;});
+      states.push({id:id, name:dname(id), set:set, accept:acc, next:{}});
+      return {id:id, isNew:true};
+    }
+    var s0 = closure(nfa, [nfa.start]);
+    add(s0);
+    for(var i=0;i<states.length;i++){
+      var st = states[i], rows = [];
+      for(var j=0;j<nfa.alpha.length;j++){
+        var a = nfa.alpha[j];
+        var mv = move(nfa, st.set, a);
+        var cl = closure(nfa, mv);
+        if(!cl.length && !withDead){
+          rows.push({sym:a, moved:mv, closed:cl, to:null, isNew:false});
+          continue;
+        }
+        if(states.length>=LIMIT && byKey[key(cl)]===undefined){ truncated = true; rows.push({sym:a, moved:mv, closed:cl, to:null, isNew:false}); continue; }
+        var r = add(cl);
+        st.next[a] = r.id;
+        rows.push({sym:a, moved:mv, closed:cl, to:r.id, isNew:r.isNew});
+      }
+      steps.push({from:st.id, rows:rows});
+    }
+    return {states:states, steps:steps, start0:s0, truncated:truncated};
+  }
+
+  /* ---------- rendering ---------- */
+  function renderStats(nfa, dfa){
+    var n = nfa.states.length, m = dfa.states.length;
+    var worst = n>40 ? '2^'+n : String(Math.pow(2,n));
+    var acc = dfa.states.filter(function(s){return s.accept;}).length;
+    $('stats').innerHTML =
+      '<div class="stat"><div class="n">'+n+'</div><div class="l">NFA states</div></div>'+
+      '<div class="stat"><div class="n">'+m+'</div><div class="l">DFA states built</div></div>'+
+      '<div class="stat"><div class="n">'+worst+'</div><div class="l">Worst case (2<sup>n</sup>)</div></div>'+
+      '<div class="stat"><div class="n">'+acc+'</div><div class="l">Accepting DFA states</div></div>';
+  }
+
+  function renderTable(nfa, dfa){
+    var h = '<table><thead><tr><th>DFA state</th><th>NFA subset</th>';
+    nfa.alpha.forEach(function(a){h += '<th>'+esc(a)+'</th>';});
+    h += '</tr></thead><tbody>';
+    dfa.states.forEach(function(s){
+      var mk = (s.id===0 ? '→' : '') + (s.accept ? '*' : '');
+      h += '<tr><td><span class="mk">'+mk+'</span>'+esc(s.name)+'</td><td class="sub">'+esc(label(s.set))+'</td>';
+      nfa.alpha.forEach(function(a){
+        var t = s.next[a];
+        h += '<td>'+(t===undefined ? '–' : esc(dfa.states[t].name))+'</td>';
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table><p class="hint">→ start state, * accepting state (its subset contains an NFA accepting state).</p>';
+    if(dfa.truncated) h += '<p class="hint" style="color:var(--bad)">Stopped at '+LIMIT+' states. The full DFA is larger.</p>';
+    $('table').innerHTML = h;
+  }
+
+  function renderTrace(nfa, dfa){
+    var h = '';
+    h += '<div class="step"><h3>Start</h3><div class="ln"><b>ε-closure</b><span>{'+esc(nfa.start)+'} <span class="arrow">→</span> '+esc(label(dfa.start0))+' = <b>'+esc(dfa.states[0].name)+'</b></span></div></div>';
+    dfa.steps.forEach(function(st){
+      var s = dfa.states[st.from];
+      h += '<div class="step"><h3>Process '+esc(s.name)+' = '+esc(label(s.set))+'</h3>';
+      st.rows.forEach(function(r){
+        var res = r.to===null ? '(no state)' : esc(dfa.states[r.to].name);
+        var tag = r.isNew ? '<span class="tag">new</span>' : '';
+        var line = 'move('+esc(label(s.set))+', '+esc(r.sym)+') = '+esc(label(r.moved));
+        if(hasEps(nfa)) line += ' <span class="arrow">→</span> closure '+esc(label(r.closed));
+        line += ' <span class="arrow">→</span> <b>'+res+'</b>'+tag;
+        h += '<div class="ln"><b>on '+esc(r.sym)+'</b><span>'+line+'</span></div>';
+      });
+      h += '</div>';
+    });
+    $('trace').innerHTML = h;
+  }
+  function hasEps(nfa){
+    return Object.keys(nfa.trans).some(function(s){return nfa.trans[s][EPS];});
+  }
+
+  function renderGraph(nfa, dfa){
+    var R=22, gx=140, gy=90, top=74;
+    var depth = {0:0};
+    for(var i=0;i<dfa.states.length;i++){
+      nfa.alpha.forEach(function(a){
+        var t = dfa.states[i].next[a];
+        if(t!==undefined && depth[t]===undefined) depth[t] = depth[i]+1;
+      });
+    }
+    var cols = {}, maxD = 0;
+    dfa.states.forEach(function(s){
+      var d = depth[s.id]===undefined ? 0 : depth[s.id];
+      (cols[d] = cols[d] || []).push(s.id);
+      if(d>maxD) maxD = d;
+    });
+    var maxRows = 0;
+    Object.keys(cols).forEach(function(d){ if(cols[d].length>maxRows) maxRows = cols[d].length; });
+    var W = 90 + maxD*gx + 60, H = top + (maxRows-1)*gy + R + 40;
+    var pos = {};
+    Object.keys(cols).forEach(function(d){
+      var list = cols[d], off = ((maxRows-list.length)*gy)/2;
+      list.forEach(function(id,k){ pos[id] = {x:90+d*gx, y:top+off+k*gy}; });
+    });
+    var edges = {};
+    dfa.states.forEach(function(s){
+      nfa.alpha.forEach(function(a){
+        var t = s.next[a];
+        if(t===undefined) return;
+        var k = s.id+'>'+t;
+        (edges[k] = edges[k] || {u:s.id, v:t, labels:[]}).labels.push(a);
+      });
+    });
+    var svg = '<svg class="g" xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="DFA state diagram">';
+    svg += '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0 0L10 5L0 10z"/></marker></defs>';
+    var eKeys = Object.keys(edges);
+    eKeys.forEach(function(k){
+      var e = edges[k], p1 = pos[e.u], p2 = pos[e.v], lab = e.labels.join(',');
+      if(e.u===e.v){
+        var x=p1.x, y=p1.y;
+        svg += '<path class="edge" marker-end="url(#ah)" d="M'+(x-10)+' '+(y-R+3)+' C'+(x-34)+' '+(y-R-44)+' '+(x+34)+' '+(y-R-44)+' '+(x+10)+' '+(y-R+2)+'"/>';
+        svg += '<text class="el" x="'+x+'" y="'+(y-R-30)+'">'+esc(lab)+'</text>';
+        return;
+      }
+      var dx=p2.x-p1.x, dy=p2.y-p1.y, len=Math.sqrt(dx*dx+dy*dy)||1;
+      var nx=-dy/len, ny=dx/len;
+      var rev = edges[e.v+'>'+e.u] ? true : false;
+      var off = rev ? 30 : 12;
+      var mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
+      var cx=mx+nx*off*2, cy=my+ny*off*2;
+      function toward(from, c){
+        var vx=c.x-from.x, vy=c.y-from.y, l=Math.sqrt(vx*vx+vy*vy)||1;
+        return {x:from.x+vx/l*R, y:from.y+vy/l*R};
+      }
+      var a = toward(p1,{x:cx,y:cy}), b = toward(p2,{x:cx,y:cy});
+      svg += '<path class="edge" marker-end="url(#ah)" d="M'+a.x.toFixed(1)+' '+a.y.toFixed(1)+' Q'+cx.toFixed(1)+' '+cy.toFixed(1)+' '+b.x.toFixed(1)+' '+b.y.toFixed(1)+'"/>';
+      var lx = 0.25*a.x+0.5*cx+0.25*b.x + nx*9, ly = 0.25*a.y+0.5*cy+0.25*b.y + ny*9;
+      svg += '<text class="el" x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'">'+esc(lab)+'</text>';
+    });
+    var s0 = pos[0];
+    svg += '<path class="edge" marker-end="url(#ah)" d="M'+(s0.x-R-36)+' '+s0.y+' L'+(s0.x-R-1)+' '+s0.y+'"/>';
+    dfa.states.forEach(function(s){
+      var p = pos[s.id];
+      svg += '<g><title>'+esc(s.name+' = '+label(s.set))+'</title>';
+      svg += '<circle class="node" id="n-'+s.id+'" cx="'+p.x+'" cy="'+p.y+'" r="'+R+'"/>';
+      if(s.accept) svg += '<circle class="ring" cx="'+p.x+'" cy="'+p.y+'" r="'+(R-5)+'"/>';
+      svg += '<text class="nl" x="'+p.x+'" y="'+p.y+'">'+esc(s.name)+'</text></g>';
+    });
+    svg += '</svg>';
+    $('graph').innerHTML = svg + '<p class="hint">Hover a state to see its NFA subset. Double ring = accepting.</p>';
+  }
+
+  function renderDef(nfa, dfa){
+    var t = 'DFA (subset construction)\n';
+    t += 'Alphabet: {'+nfa.alpha.join(', ')+'}\n';
+    t += 'States: '+dfa.states.map(function(s){return s.name+' = '+label(s.set);}).join('\n        ')+'\n';
+    t += 'Start: '+dfa.states[0].name+'\n';
+    t += 'Accepting: {'+dfa.states.filter(function(s){return s.accept;}).map(function(s){return s.name;}).join(', ')+'}\n';
+    t += 'Transitions:\n';
+    dfa.states.forEach(function(s){
+      nfa.alpha.forEach(function(a){
+        if(s.next[a]!==undefined) t += '  '+s.name+' --'+a+'--> '+dfa.states[s.next[a]].name+'\n';
+      });
+    });
+    $('def').textContent = t.replace(/\n$/,'');
+  }
+
+  /* ---------- string tester ---------- */
+  function tokenize(nfa, w){
+    w = w.trim();
+    if(!w) return [];
+    if(/\s/.test(w)) return w.split(/\s+/);
+    var multi = nfa.alpha.some(function(a){return a.length>1;});
+    return multi ? w.split(/\s+/) : w.split('');
+  }
+  function runTests(nfa, dfa){
+    var syms = tokenize(nfa, $('word').value);
+    var bad = syms.filter(function(s){return nfa.alpha.indexOf(s)<0;});
+    document.querySelectorAll('svg .node.on').forEach(function(n){n.setAttribute('class','node');});
+    if(bad.length){
+      $('res').innerHTML = '<div class="verdict"><div class="t">Not in the alphabet</div><div class="v no">'+esc(bad[0])+'</div><div class="p">The alphabet is {'+esc(nfa.alpha.join(', '))+'}.</div></div>';
+      return;
+    }
+    var cur = closure(nfa, [nfa.start]);
+    syms.forEach(function(a){ cur = closure(nfa, move(nfa, cur, a)); });
+    var nAcc = cur.some(function(s){return nfa.accept.indexOf(s)>=0;});
+    var d = 0, path = [dfa.states[0].name], stuck = false;
+    for(var i=0;i<syms.length;i++){
+      var t = dfa.states[d].next[syms[i]];
+      if(t===undefined){stuck = true;break;}
+      d = t; path.push(dfa.states[d].name);
+    }
+    var dAcc = !stuck && dfa.states[d].accept;
+    $('res').innerHTML =
+      '<div class="verdict"><div class="t">NFA</div><div class="v '+(nAcc?'ok':'no')+'">'+(nAcc?'Accepted':'Rejected')+'</div><div class="p">Ends in '+esc(label(cur))+'</div></div>'+
+      '<div class="verdict"><div class="t">DFA</div><div class="v '+(dAcc?'ok':'no')+'">'+(dAcc?'Accepted':'Rejected')+'</div><div class="p">'+esc(path.join(' → '))+(stuck?' (no transition)':'')+'</div></div>';
+    path.forEach(function(nm){
+      var id = nm.length===1 ? nm.charCodeAt(0)-65 : parseInt(nm.slice(1),10);
+      var el = document.getElementById('n-'+id);
+      if(el) el.setAttribute('class','node on');
+    });
+  }
+
+  /* ---------- main ---------- */
+  var current = null;
+  function update(){
+    var nfa = parseNFA(), box = $('errs');
+    if(nfa.errs.length){
+      box.className = 'errs on';
+      box.innerHTML = nfa.errs.map(esc).join('<br>');
+      current = null;
+      return;
+    }
+    box.className = 'errs'; box.innerHTML = '';
+    var dfa = construct(nfa, $('dead').checked);
+    current = {nfa:nfa, dfa:dfa};
+    renderStats(nfa, dfa);
+    renderTable(nfa, dfa);
+    renderGraph(nfa, dfa);
+    renderTrace(nfa, dfa);
+    renderDef(nfa, dfa);
+    runTests(nfa, dfa);
+  }
+
+  function loadPreset(i){
+    var p = PRESETS[i];
+    $('start').value = p.start; $('accept').value = p.accept;
+    $('trans').value = p.trans; $('word').value = p.word;
+    update();
+  }
+
+  presetSel.addEventListener('change', function(){ loadPreset(+presetSel.value); });
+  ['start','accept','trans','dead'].forEach(function(id){ $(id).addEventListener('input', update); });
+  $('word').addEventListener('input', function(){ if(current) runTests(current.nfa, current.dfa); });
+  $('copy').addEventListener('click', function(){
+    var btn = $('copy'), txt = $('def').textContent;
+    function sel(){
+      var r = document.createRange(); r.selectNodeContents($('def'));
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      btn.textContent = 'Selected, press copy';
+    }
+    try{
+      navigator.clipboard.writeText(txt).then(function(){ btn.textContent = 'Copied'; setTimeout(function(){btn.textContent='Copy';},1500); }, sel);
+    }catch(e){ sel(); }
+  });
+
+  loadPreset(0);
+})();
+</script>
+
+</html>
